@@ -363,11 +363,6 @@ def linear_activation_forward_with_dropout(A_prev, W, b, keep_prob, activation):
 
     cache = (activation_cache, linear_cache, D)
 
-    print('activation: ', activation)
-
-
-    # implement dropout here
-
     assert(A.shape == Z.shape)
 
     return A, cache
@@ -394,7 +389,7 @@ def L_model_forward_with_dropout(X, parameters, keep_prob):
     return AL, caches
 
 
-def linear_activation_backward_with_dropout(dA, cache, keep_prob, activation):
+def linear_activation_backward_with_dropout(dA, D_prev, cache, keep_prob, activation):
     activation_cache, linear_cache, D = cache
 
     if activation == 'relu':
@@ -410,8 +405,11 @@ def linear_activation_backward_with_dropout(dA, cache, keep_prob, activation):
     dW = 1./m * np.dot(dZ, A_prev.T)
     db = 1./m * np.sum(dZ, axis=1, keepdims=True)
     dA_prev = np.dot(W.T, dZ)
-    dA_prev = np.multiply(dA_prev, D)
-    dA_prev = dA_prev/keep_prob
+
+    if D_prev is not None:
+        dA_prev = np.multiply(dA_prev, D_prev)
+        dA_prev = dA_prev/keep_prob
+
     return dA_prev, dW, db
 
 def L_model_backward_with_dropout(AL, Y, caches, keep_prob):
@@ -421,17 +419,22 @@ def L_model_backward_with_dropout(AL, Y, caches, keep_prob):
     dAL = -(np.divide(Y, AL) - np.divide(1 - Y, 1 - AL))
     cacheL = caches[L - 1]
 
-    dA_prev, dWL, dbL = linear_activation_backward_with_dropout(dAL, cacheL, keep_prob, 'sigmoid')
+    dA_prev, dWL, dbL = linear_activation_backward_with_dropout(dAL, None, cacheL, keep_prob, 'sigmoid')
     grads['dW' + str(L)] = dWL
     grads['db' + str(L)] = dbL
 
     for l in reversed(range(L - 1)):
         # l [1, 0]
         current_cache = caches[l]
-        dA_prev, dW, db = linear_activation_backward_with_dropout(dA_prev, current_cache, keep_prob, 'relu')
+        if l > 0:
+            prev_cache = caches[l - 1]
+            prev_activation_cache, prev_linear_cache, D_prev = prev_cache
 
+        dA_prev, dW, db = linear_activation_backward_with_dropout(dA_prev, D_prev, current_cache, keep_prob, 'relu')
         grads['dW' + str(l + 1)] = dW
         grads['db' + str(l + 1)] = db
+
+        D_prev = None  # Clear D_prev for next iteration
 
     return grads
 
@@ -445,8 +448,10 @@ def L_model_with_dropout(X, Y, layer_dims, learning_rate=0.0075, num_iterations=
         AL, caches = L_model_forward_with_dropout(X, parameters, keep_prob)
         cost = compute_cost(AL, Y)
         grads = L_model_backward_with_dropout(AL, Y, caches, keep_prob)
+
+        parameters = update_parameters(parameters, grads, learning_rate)
         if i % 100 == 0 and print_cost:
-            print('cost after {0} iterations is: {1}', i, cost)
+            print('cost after {0} iterations is: {1}'.format(i, cost))
             costs.append(cost)
 
     plt.plot(np.squeeze(costs))
