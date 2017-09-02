@@ -165,6 +165,7 @@ def model_forward_propagation(X, parameters):
 def compute_cross_entropy_cost(AL, Y):
     assert(AL.shape == Y.shape) # check shape to compute cost
     m = Y.shape[1]
+    print(np.log(1 - AL))
     logprobs = np.multiply(Y, np.log(AL)) + np.multiply(1 - Y, np.log(1 - AL))
     cost = -(1./m) * np.sum(logprobs)
     cost = np.squeeze(cost)
@@ -365,6 +366,30 @@ def test_model_forward_propagation():
     assert(AL.shape == (1, 10))
     assert(len(caches) == 3)
 
+    ## Reimplement forward propagation to check result
+    #
+    # Network graph:
+    #
+    # X       ->    Z1  A1    ->    Z2  A2   ->   Z3  A3
+    # (5, 10)      W1(5, 5)        W2(3, 5)      W3(1, 3)
+
+    W1 = parameters['W1']
+    b1 = parameters['b1']
+    Z1 = np.dot(W1, X) + b1
+    A1 = np.multiply(Z1, np.int64(Z1 > 0))
+
+    W2 = parameters['W2']
+    b2 = parameters['b2']
+    Z2 = np.dot(W2, A1) + b2
+    A2 = np.multiply(Z2, np.int64(Z2 > 0))
+
+    W3 = parameters['W3']
+    b3 = parameters['b3']
+    Z3 = np.dot(W3, A2) + b3
+    A3 = 1/(1 + np.exp(-Z3))
+
+    assert((AL == A3).all())
+
     print('test_model_forward_propagation passed!')
 
 def test_compute_cross_entropy_cost():
@@ -386,12 +411,102 @@ def test_compute_cross_entropy_cost():
 #### Support test_model_backward_propagation functions
 ######################################################
 
+def vector_to_dict(theta):
+    # Convert vector to parameter, for network graph:
+    #
+    # X       ->    Z1  A1    ->    Z2  A2   ->   Z3  A3
+    # (5, 10)      W1(5, 5)        W2(3, 5)      W3(1, 3)
+    #              b1(5, 1)        b2(3, 1)      b3(1, 1)
+
+    # return theta
+    parameters = {}
+
+    parameters['W1'] = theta[:25, :].reshape(5, 5)
+    parameters['b1'] = theta[25:30, :].reshape(5, 1)
+    parameters['W2'] = theta[30:45, :].reshape(3, 5)
+    parameters['b2'] = theta[45:48, :].reshape(3, 1)
+    parameters['W3'] = theta[48:51, :].reshape(1, 3)
+    parameters['b3'] = theta[51:, :].reshape(1, 1)
+
+    assert(parameters['W1'].shape == (5, 5))
+    assert(parameters['b1'].shape == (5, 1))
+    assert(parameters['W2'].shape == (3, 5))
+    assert(parameters['b2'].shape == (3, 1))
+    assert(parameters['W3'].shape == (1, 3))
+    assert(parameters['b3'].shape == (1, 1))
+
+    return parameters
+
+def dict_to_vector(dict):
+    count = 0
+    for key in ['W1', 'b1', 'W2', 'b2', 'W3', 'b3']:
+        if count == 0:
+            theta = dict[key].reshape(-1, 1)
+            count = count + 1
+        else:
+            theta = np.concatenate((theta, dict[key].reshape(-1, 1)))
+    return theta
+
+
+def gradient_to_vector(grads):
+    count = 0
+    for key in ['dW1', 'db1', 'dW2', 'db2', 'dW3', 'db3']:
+        if count == 0:
+            vec = grads[key].reshape(-1, 1)
+            count = count + 1
+        else:
+            vec = np.concatenate((vec, grads[key].reshape(-1, 1)))
+    return vec
+
+
+
+def gradient_check(parameters, gradients, X, Y, epsilon=1e-7):
+    # Gradient check for network graph:
+    #
+    # X       ->    Z1  A1    ->    Z2  A2   ->   Z3  A3
+    # (5, 10)      W1(5, 5)        W2(3, 5)      W3(1, 3)
+
+    grads = gradient_to_vector(gradients)  # (n, 1)
+    theta = dict_to_vector(parameters)     # (n, 1)
+
+    number_of_parameters = theta.shape[0]
+    J_plus = np.zeros((number_of_parameters, 1))
+    J_minus = np.zeros((number_of_parameters, 1))
+    grads_approx = np.zeros((number_of_parameters, 1))
+
+    for i in range(number_of_parameters):
+        theta_plus = np.copy(theta)
+        theta_plus[i][0] = theta_plus[i][0] + epsilon
+        AL_plus, _ = model_forward_propagation(X, vector_to_dict(theta_plus))
+        J_plus[i][0] = compute_cross_entropy_cost(AL_plus, Y)
+
+        theta_minus = np.copy(theta)
+        theta_minus[i][0] = theta_minus[i][0] - epsilon
+        AL_minus, _ = model_forward_propagation(X, vector_to_dict(theta_minus))
+        J_minus[i][0] = compute_cross_entropy_cost(AL_minus, Y)
+
+        grads_approx[i][0] = (J_plus[i][0] - J_minus[i][0]) / (2 * epsilon)
+
+    numerator = np.linalg.norm(grads_approx) - np.linalg.norm(grads)
+    denominator = np.linalg.norm(grads_approx + grads)
+
+    difference = numerator / denominator
+
+    print('difference: ', difference)
+    if difference <= 1e-7:
+        print('Good backward propagation!')
+    else:
+        print('There is a problem with your backward propagation')
+
+    return difference
+
+
 def test_model_backward_propagation():
     print('test_model_backward_propagation start:')
 
     np.random.seed(0)
 
-    X = np.random.randn(5, 10)
+    X = np.random.randn(5, 10) / 255.
     Y = np.random.randint(2, size=(1, 10))
 
     layer_dims = [X.shape[0], 5, 3, 1]
@@ -414,7 +529,75 @@ def test_model_backward_propagation():
     assert(dW3.shape == (1, 3))
     assert(db3.shape == (1, 1))
 
-    # TODO: implement gradient check here
+    # Re-implement forward and backward propagation
+
+    ## Reimplement forward propagation to check result
+    #
+    # Network graph:
+    #
+    # X       ->    Z1  A1    ->    Z2  A2   ->   Z3  A3
+    # (5, 10)      W1(5, 5)        W2(3, 5)      W3(1, 3)
+
+    # forward propagation
+    W1 = parameters['W1']
+    b1 = parameters['b1']
+    Z1 = np.dot(W1, X) + b1
+    A1 = np.multiply(Z1, np.int64(Z1 > 0))
+
+    W2 = parameters['W2']
+    b2 = parameters['b2']
+    Z2 = np.dot(W2, A1) + b2
+    A2 = np.multiply(Z2, np.int64(Z2 > 0))
+
+    W3 = parameters['W3']
+    b3 = parameters['b3']
+    Z3 = np.dot(W3, A2) + b3
+    A3 = 1/(1 + np.exp(-Z3))
+
+
+    # backward propagation
+    m = Y.shape[1]
+
+    dZ3 = (A3 - Y)
+    dW3 = 1./m * np.dot(dZ3, A2.T)
+    db3 = 1./m * np.sum(dZ3, axis=1, keepdims=True)
+    dA2 = np.dot(W3.T, dZ3)
+
+    dZ2 = np.multiply(dA2, np.int64(Z2 > 0))
+    dW2 = 1./m * np.dot(dZ2, A1.T)
+    db2 = 1./m * np.sum(dZ2, axis=1, keepdims=True)
+    dA1 = np.dot(W2.T, dZ2)
+
+    dZ1 = np.multiply(dA1, np.int64(Z1 > 0))
+    dW1 = 1./m * np.dot(dZ1, X.T)
+    db1 = 1./m * np.sum(dZ1, axis=1, keepdims=True)
+
+    assert(grads['dW3'].shape == dW3.shape)
+    assert(grads['db3'].shape == db3.shape)
+    assert(grads['dW2'].shape == dW2.shape)
+    assert(grads['db2'].shape == db2.shape)
+    assert(grads['dW1'].shape == dW1.shape)
+    assert(grads['db1'].shape == db1.shape)
+
+    assert((grads['dW3'] == dW3).all())
+    assert((grads['db3'] == db3).all())
+    assert((grads['dW2'] == dW2).all())
+    assert((grads['db2'] == db2).all())
+    assert((grads['dW1'] == dW1).all())
+    assert((grads['db1'] == db1).all())
+
+
+    # vec = gradient_to_vector(grads)
+    theta = dict_to_vector(parameters)
+    n_parameters = vector_to_dict(theta)
+
+    assert((parameters['W1'] == n_parameters['W1']).all())
+    assert((parameters['b1'] == n_parameters['b1']).all())
+    assert((parameters['W2'] == n_parameters['W2']).all())
+    assert((parameters['b2'] == n_parameters['b2']).all())
+    assert((parameters['W3'] == n_parameters['W3']).all())
+    assert((parameters['b3'] == n_parameters['b3']).all())
+    gradient_check(parameters, grads, X, Y)
 
     print('test_model_backward_propagation passed!')
 
@@ -456,14 +639,14 @@ def test_update_parameters():
 
 
 def main():
-    test_initialize_parameters()
-    test_random_mini_batches()
-    test_relu()
-    test_sigmoid()
-    test_model_forward_propagation()
-    test_compute_cross_entropy_cost()
+    # test_initialize_parameters()
+    # test_random_mini_batches()
+    # test_relu()
+    # test_sigmoid()
+    # test_model_forward_propagation()
+    # test_compute_cross_entropy_cost()
     test_model_backward_propagation()
-    test_update_parameters()
+    # test_update_parameters()
 
 
 if __name__ == '__main__':
