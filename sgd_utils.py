@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
+import math
 
 
 ########################################
@@ -165,7 +166,6 @@ def model_forward_propagation(X, parameters):
 def compute_cross_entropy_cost(AL, Y):
     assert(AL.shape == Y.shape) # check shape to compute cost
     m = Y.shape[1]
-    print(np.log(1 - AL))
     logprobs = np.multiply(Y, np.log(AL)) + np.multiply(1 - Y, np.log(1 - AL))
     cost = -(1./m) * np.sum(logprobs)
     cost = np.squeeze(cost)
@@ -242,10 +242,103 @@ def update_parameters(parameters, grads, learning_rate):
     return parameters
 
 
+##############################
+###  Momentum implementation
+##############################
+
+def initialize_velocity(parameters):
+    L = len(parameters) // 2
+    v = {}
+
+    for l in range(L):
+        W = parameters['W' + str(l + 1)]
+        b = parameters['b' + str(l + 1)]
+        v['dW' + str(l + 1)] = np.zeros(W.shape)
+        v['db' + str(l + 1)] = np.zeros(b.shape)
+
+    return v
+
+
+def update_parameters_with_momentum(parameters, grads, v, beta, learning_rate):
+    L = len(parameters) // 2
+
+    for l in range(L):
+        vdW = v['dW' + str(l + 1)]
+        dW = grads['dW' + str(l + 1)]
+
+        vdb = v['db' + str(l + 1)]
+        db = grads['db' + str(l + 1)]
+
+        v['dW' + str(l + 1)] = beta * vdW + (1 - beta) * dW
+        v['db' + str(l + 1)] = beta * vdb + (1 - beta) * db
+
+        parameters['W' + str(l + 1)] = parameters['W' + str(l + 1)] - learning_rate * v['dW' + str(l + 1)]
+        parameters['b' + str(l + 1)] = parameters['b' + str(l + 1)] - learning_rate * v['db' + str(l + 1)]
+
+    return parameters, v
+
+
+##############################
+###  Adam implementation
+##############################
+
+def initialize_adam(parameters):
+    L = len(parameters) // 2
+    v = {}
+    s = {}
+
+    for l in range(L):
+        W = parameters['W' + str(l + 1)]
+        b = parameters['b' + str(l + 1)]
+
+        v['dW' + str(l + 1)] = np.zeros(W.shape)
+        v['db' + str(l + 1)] = np.zeros(b.shape)
+        s['dW' + str(l + 1)] = np.zeros(W.shape)
+        s['db' + str(l + 1)] = np.zeros(b.shape)
+
+    return v, s
+
+
+def update_parameters_with_adam(parameters, grads, v, s, t, learning_rate = 0.01,
+                                beta1 = 0.9, beta2 = 0.999, epsilon=1e-8):
+    L = len(parameters) // 2
+    v_corrected = {}
+    s_corrected = {}
+
+    for l in range(L):
+        dW = grads['dW' + str(l + 1)]
+        db = grads['db' + str(l + 1)]
+
+        v['dW' + str(l + 1)] = beta1 * v['dW' + str(l + 1)] + (1 - beta1) * dW
+        v['db' + str(l + 1)] = beta1 * v['db' + str(l + 1)] + (1 - beta1) * db
+
+        v_corrected['dW' + str(l + 1)] = v['dW' + str(l + 1)]/(1 - math.pow(beta1, t))
+        v_corrected['db' + str(l + 1)] = v['db' + str(l + 1)]/(1 - math.pow(beta1, t))
+
+        s['dW' + str(l + 1)] = beta2 * s['dW' + str(l + 1)] + (1 - beta2) * np.square(dW)
+        s['db' + str(l + 1)] = beta2 * s['db' + str(l + 1)] + (1 - beta2) * np.square(db)
+
+        s_corrected['dW' + str(l + 1)] = s['dW' + str(l + 1)]/(1 - math.pow(beta2, t))
+        s_corrected['db' + str(l + 1)] = s['db' + str(l + 1)]/(1 - math.pow(beta2, t))
+
+        parameters['W' + str(l + 1)] = parameters['W' + str(l + 1)] - learning_rate * np.divide(v_corrected['dW' + str(l + 1)], np.sqrt(s_corrected['dW' + str(l + 1)]) + epsilon)
+        parameters['b' + str(l + 1)] = parameters['b' + str(l + 1)] - learning_rate * np.divide(v_corrected['db' + str(l + 1)], np.sqrt(s_corrected['db' + str(l + 1)]) + epsilon)
+
+    return parameters, v, s
+
+
 def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size = 64, beta = 0.9,
         beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8, num_epochs = 10000, print_cost = True):
     parameters = initialize_parameters(layer_dims)
     costs = []
+
+    if optimizer == 'momentum':
+        v = initialize_velocity(parameters)
+    elif optimizer == 'adam':
+        v, s = initialize_adam(parameters)
+        t = 0
+
+
     for i in range(num_epochs):
         # Define mini_batches
         mini_batches = random_mini_batches(X, Y, mini_batch_size)
@@ -262,7 +355,13 @@ def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size =
             grads = model_backward_propagation(AL, mini_batch_Y, caches)
 
             # update parameters
-            parameters = update_parameters(parameters, grads, learning_rate)
+            if optimizer == 'momentum':
+                parameters, v = update_parameters_with_momentum(parameters, grads, v, beta, learning_rate)
+            elif optimizer == 'adam':
+                t = t + 1
+                parameters, v, s = update_parameters_with_adam(parameters, grads, v, s, t, learning_rate, beta1, beta2, epsilon)
+            else:
+                parameters = update_parameters(parameters, grads, learning_rate)
 
         if i % 100 == 0 and print_cost:
             print('cost after {0} epochs is: {1}'.format(i, cost))
@@ -392,6 +491,7 @@ def test_model_forward_propagation():
 
     print('test_model_forward_propagation passed!')
 
+
 def test_compute_cross_entropy_cost():
     print('test_compute_cross_entropy_cost start:')
 
@@ -436,6 +536,7 @@ def vector_to_dict(theta):
     assert(parameters['b3'].shape == (1, 1))
 
     return parameters
+
 
 def dict_to_vector(dict):
     count = 0
