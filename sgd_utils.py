@@ -116,18 +116,9 @@ def linear_forward(A_prev, W, b):
     cache = (A_prev, W, b)
     Z = W.dot(A_prev) + b
 
-
-    # Implement normalization
-    # m = A_prev.shape[1]
-    # epsilon = 1e-8
-    # micro = 1./m * np.mean(Z, axis = 1, keepdims=True)
-    # sigma_square = 1./m * np.sum(np.square(Z - micro))
-
-    # Z_norm = np.divide(Z - micro, np.sqrt(sigma_square + epsilon))
-
     assert(Z.shape == (W.shape[0], A_prev.shape[1]))
 
-    return Z_norm, cache
+    return Z, cache
 
 
 def linear_activation_forward(A_prev, W, b, activation):
@@ -336,6 +327,175 @@ def update_parameters_with_adam(parameters, grads, v, s, t, learning_rate = 0.01
     return parameters, v, s
 
 
+################################
+###  Batch norm implementation
+################################
+
+def initialize_batch_norm_parameters(layer_dims):
+    L = len(layer_dims)
+
+    batch_norm_parameters = {}
+
+    # L = 3
+    # l in [1, 2]
+    for l in range(1, L):
+        batch_norm_parameters['gamma' + str(l)] = np.random.randn(layer_dims[l], 1)
+        batch_norm_parameters['beta' + str(l)] = np.random.randn(layer_dims[l], 1)
+
+    return batch_norm_parameters
+
+
+def batch_norm_forward(Z, gamma, beta, epsilon=1e-8):
+
+    # Number of example
+    m = Z.shape[1]
+
+    # Mean
+    mu = 1./m * np.sum(Z, axis=1, keepdims=True)
+
+    # Variance square
+    variance_square = 1./m * np.sum(np.square(Z - mu), axis=1, keepdims=True)
+
+    # Z - mu / sqrt(variance_square + espilon)
+    Z_norm = np.divide(Z - mu, np.sqrt(variance_square + epsilon))
+
+    Z_tilde = gamma * Z_norm + beta
+
+    cache = (Z, gamma, beta, Z_norm, mu, variance_square)
+
+    return Z_tilde, cache
+
+
+def activation_forward(Z, activation):
+
+    if activation == 'relu':
+        A, activation_cache = relu(Z)
+    elif activation == 'sigmoid':
+        A, activation_cache = sigmoid(Z)
+    else:
+        raise ValueError('{0} activation is not supported'.format(activation))
+
+    cache = activation_cache
+    return A, cache
+
+
+def model_forward_propagation_with_batch_norm(X, parameters, batch_norm_parameters):
+
+    L = len(parameters) // 2  # parameters: W, b
+    caches = []
+
+    A = X
+    # Ex: L = 3
+    # l = [0, 1]
+    for l in range(L - 1):
+        W = parameters['W' + str(l + 1)]
+        b = parameters['b' + str(l + 1)]
+        gamma = batch_norm_parameters['gamma' + str(l + 1)]
+        beta = batch_norm_parameters['beta' + str(l + 1)]
+
+        A_prev = A
+
+        Z, linear_cache = linear_forward(A_prev, W, b)
+        Z_tilde, batch_norm_cache = batch_norm_forward(Z, gamma, beta)
+        A, activation_cache = activation_forward(Z_tilde, activation='relu')
+
+        cache = (activation_cache, batch_norm_cache, linear_cache)
+        caches.append(cache)
+
+
+    # Compute for last layers
+    WL = parameters['W' + str(L)]
+    bL = parameters['b' + str(L)]
+    gammaL = batch_norm_parameters['gamma' + str(L)]
+    betaL = batch_norm_parameters['beta' + str(L)]
+    A_prev = A
+
+    Z, linear_cache = linear_forward(A_prev, WL, bL)
+    Z_tilde, batch_norm_cache = batch_norm_forward(Z, gammaL, betaL)
+    AL, activation_cache = activation_forward(Z_tilde, activation='sigmoid')
+
+    cache = (activation_cache, batch_norm_cache, linear_cache)
+    caches.append(cache)
+
+    return AL, caches
+
+
+def batch_norm_backward(dZ_tilde, cache):
+    # cache: (Z, gamma, beta, Z_norm, mu, variance_square)
+
+    Z, gamma, beta, Z_norm, mu, variance_square = cache
+
+
+    dgamma = np.sum(dZ_tilde * Z_norm, axis=1, keepdims=1)
+
+    dbeta = np.sum(dZ_tilde, axis=1, keepdims=1)
+
+    dZ_norm = gamma * dZ_tilde
+
+    dZ = None  # TODO: implement DZ
+
+    return dZ, dgamma, dbeta
+
+def activation_backward(dA, cache, activation):
+    # cache: Z
+
+    if activation == 'relu':
+        return relu_backward(dA, cache)
+    elif activation == 'sigmoid':
+        return sigmoid(dA, cache)
+    else:
+        raise ValueError('{0} activation is not supported'.format(activation))
+
+
+def model_backward_propagation_with_batch_norm(AL, Y, caches):
+    L = len(caches)
+
+    grads = {}
+    batch_norm_grads = {}
+
+    cacheL = caches[L - 1]
+    activation_cache, batch_norm_cache, linear_cache = cacheL
+
+    # backward for last layer
+    dZ_tildeL = AL - Y
+    dZ, dgammaL, dbetaL = batch_norm_backward(dZ_tildeL, batch_norm_cache)
+    dA_prev, dWL, dbL = linear_backward(dZ, linear_cache)
+
+    grads['dW' + str(L)] = dWL
+    grads['db' + str(L)] = dbL
+    batch_norm_grads['dgamma' + str(L)] = dgammaL
+    batch_norm_grads['dbeta' + str(L)] = dbetaL
+
+    # Ex: L = 3
+    # l in [1, 0]
+    for l in reversed(range(L - 1)):
+        current_cache = caches[l]
+        activation_cache, batch_norm_cache, linear_cache = current_cache
+        dZ_tilde = activation_backward(dA_prev, activation_cache, activation='relu')
+        dZ, dgamma, dbeta = batch_norm_backward(dZ_tilde, batch_norm_cache)
+        dA_prev, dW, db = linear_backward(dZ, linear_cache)
+
+        grads['dW' + str(l + 1)] = dW
+        grads['db' + str(l + 1)] = db
+        batch_norm_grads['dgamma' + str(l + 1)] = dgamma
+        batch_norm_grads['dbeta' + str(l + 1)] = dbeta
+
+
+    return grads, batch_norm_grads
+
+
+def update_batch_norm_parameters(parameters, grads, learning_rate):
+    L = len(parameters) // 2  ## gamma and beta
+
+    for l in range(L):
+        parameters['gamma' + str(l + 1)] = parameters['gamma' + str(l + 1)] - learning_rate * grads['gamma' + str(l + 1)]
+        parameters['beta' + str(l + 1)] = parameters['beta' + str(l + 1)] - learning_rate * grads['beta' + str(l + 1)]
+
+    return parameters
+
+################################
+###  Network implementation
+################################
 def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size = 64, beta = 0.9,
         beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8, num_epochs = 10000, print_cost = True):
     parameters = initialize_parameters(layer_dims)
@@ -383,6 +543,38 @@ def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size =
     plt.show()
 
     return parameters
+
+
+
+def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=3000, mini_batch_size=64, print_cost=True):
+    parameters = initialize_parameters(layer_dims)
+    batch_norm_parameters = initialize_batch_norm_parameters(layer_dims)
+    costs = []
+
+    for i in range(num_epochs):
+        # Define mini_batches
+        mini_batches = random_mini_batches(X, Y, mini_batch_size)
+        for mini_batch in mini_batches:
+            mini_batch_X, mini_batch_Y = mini_batch
+            # forward propagation
+            AL, caches = model_forward_propagation_with_batch_norm(mini_batch_X, parameters, batch_norm_parameters)
+
+            # compute cost
+            cost = compute_cross_entropy_cost(AL, mini_batch_Y)
+
+            # backward propagation
+            grads, batch_norm_grads = model_backward_propagation_with_batch_norm(AL, Y, caches)
+
+            # update parameters
+            parameters = update_parameters(parameters, grads, learning_rate)
+            batch_norm_parameters = update_batch_norm_parameters(batch_norm_parameters, batch_norm_grads, learning_rate)
+
+        if i % 100 == 0 and print_cost:
+            print('cost after {0} epochs is: {1}'.format(i, cost))
+            costs.append(cost)
+
+    return parameters
+
 
 
 #################################
@@ -747,6 +939,17 @@ def test_update_parameters():
     print('test_update_parameters passed!')
 
 
+def test_model_with_batch_norm():
+    train_set_x_orig, train_set_y_orig, test_set_x_orig, test_set_y_orig = load_data()
+    X = (train_set_x_orig.reshape(train_set_x_orig.shape[0], -1) / 255.).T
+    Y = (train_set_y_orig.reshape(train_set_y_orig.shape[0], 1)).T
+    X_test = (test_set_x_orig.reshape(test_set_x_orig.shape[0], -1) / 255.).T
+    Y_test = (test_set_y_orig.reshape(test_set_y_orig.shape[0], 1)).T
+
+    layer_dims = [X.shape[0], 5, 3, 1]
+
+    model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=3000, mini_batch_size=64, print_cost=True)
+
 
 def main():
     # test_initialize_parameters()
@@ -755,8 +958,9 @@ def main():
     # test_sigmoid()
     # test_model_forward_propagation()
     # test_compute_cross_entropy_cost()
-    test_model_backward_propagation()
+    # test_model_backward_propagation()
     # test_update_parameters()
+    test_model_with_batch_norm()
 
 
 if __name__ == '__main__':
