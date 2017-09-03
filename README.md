@@ -19,7 +19,7 @@ Including:
 1. Stochastic gradient descent
 2. Update parameters with Momentum
 3. Update parameters with Adam
-
+4. Batch norm (Currently, working on it)
 
 ## Contributor
 [darkamenosa](github.com/darkamenosa)
