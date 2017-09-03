@@ -116,9 +116,18 @@ def linear_forward(A_prev, W, b):
     cache = (A_prev, W, b)
     Z = W.dot(A_prev) + b
 
+
+    # Implement normalization
+    # m = A_prev.shape[1]
+    # epsilon = 1e-8
+    # micro = 1./m * np.mean(Z, axis = 1, keepdims=True)
+    # sigma_square = 1./m * np.sum(np.square(Z - micro))
+
+    # Z_norm = np.divide(Z - micro, np.sqrt(sigma_square + epsilon))
+
     assert(Z.shape == (W.shape[0], A_prev.shape[1]))
 
-    return Z, cache
+    return Z_norm, cache
 
 
 def linear_activation_forward(A_prev, W, b, activation):
