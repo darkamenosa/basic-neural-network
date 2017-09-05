@@ -339,8 +339,8 @@ def initialize_batch_norm_parameters(layer_dims):
     # L = 3
     # l in [1, 2]
     for l in range(1, L):
-        batch_norm_parameters['gamma' + str(l)] = np.random.randn(layer_dims[l], 1)
-        batch_norm_parameters['beta' + str(l)] = np.random.randn(layer_dims[l], 1)
+        batch_norm_parameters['gamma' + str(l)] = np.ones((layer_dims[l], 1))
+        batch_norm_parameters['beta' + str(l)] = np.zeros((layer_dims[l], 1))
 
     return batch_norm_parameters
 
@@ -350,18 +350,31 @@ def batch_norm_forward(Z, gamma, beta, epsilon=1e-8):
     # Number of example
     m = Z.shape[1]
 
-    # Mean
+    # Step 1: Calculate mean
     mu = 1./m * np.sum(Z, axis=1, keepdims=True)
 
-    # Variance square
-    variance_square = 1./m * np.sum(np.square(Z - mu), axis=1, keepdims=True)
+    # Step 2:
+    zmu = Z - mu
 
-    # Z - mu / sqrt(variance_square + espilon)
-    Z_norm = np.divide(Z - mu, np.sqrt(variance_square + epsilon))
+    # Step 3:
+    sq = zmu ** 2
 
+    # step 4:
+    var = 1./m * np.sum(sq, axis=1, keepdims=True)
+
+    # step 5:
+    sqrtvar = np.sqrt(var + epsilon)
+
+    # step 6:
+    ivar = 1./sqrtvar
+
+    # step 7:
+    Z_norm = zmu * ivar
+
+    # step 8:
     Z_tilde = gamma * Z_norm + beta
 
-    cache = (Z, gamma, beta, Z_norm, mu, variance_square)
+    cache = (Z, gamma, beta, mu, zmu, sq, var, sqrtvar, ivar, Z_norm, epsilon)
 
     return Z_tilde, cache
 
@@ -423,18 +436,44 @@ def model_forward_propagation_with_batch_norm(X, parameters, batch_norm_paramete
 def batch_norm_backward(dZ_tilde, cache):
     # cache: (Z, gamma, beta, Z_norm, mu, variance_square)
 
-    Z, gamma, beta, Z_norm, mu, variance_square = cache
+    Z, gamma, beta, mu, zmu, sq, var, sqrtvar, ivar, Z_norm, eps = cache
 
+    m = Z.shape[1]
 
+    # Step 8:
     dgamma = np.sum(dZ_tilde * Z_norm, axis=1, keepdims=1)
-
     dbeta = np.sum(dZ_tilde, axis=1, keepdims=1)
-
     dZ_norm = gamma * dZ_tilde
 
-    dZ = None  # TODO: implement DZ
+    # Step 7:
+    divar = np.sum(dZ_norm * zmu, axis=1, keepdims=True)
+    dzmu1 = dZ_norm * ivar
+
+    # Step 6:
+    dsqrtvar = -1./(sqrtvar**2) * divar
+
+    # Step 5:
+    dvar = 1./(2. * np.sqrt(var + eps)) * dsqrtvar
+
+    # Step 4:
+    dsq = 1./m * dvar
+
+    # Step 3:
+    dzmu2 = 2 * zmu * dsq
+
+    # Step 2:
+    dzmu = dzmu1 + dzmu2
+
+    dz1 = dzmu
+    dmu = -1. * np.sum(dzmu, axis=1, keepdims=True)
+
+    # Step 1:
+    dz2 = 1./m * dmu
+
+    dZ = dz1 + dz2
 
     return dZ, dgamma, dbeta
+
 
 def activation_backward(dA, cache, activation):
     # cache: Z
@@ -488,8 +527,8 @@ def update_batch_norm_parameters(parameters, grads, learning_rate):
     L = len(parameters) // 2  ## gamma and beta
 
     for l in range(L):
-        parameters['gamma' + str(l + 1)] = parameters['gamma' + str(l + 1)] - learning_rate * grads['gamma' + str(l + 1)]
-        parameters['beta' + str(l + 1)] = parameters['beta' + str(l + 1)] - learning_rate * grads['beta' + str(l + 1)]
+        parameters['gamma' + str(l + 1)] = parameters['gamma' + str(l + 1)] - learning_rate * grads['dgamma' + str(l + 1)]
+        parameters['beta' + str(l + 1)] = parameters['beta' + str(l + 1)] - learning_rate * grads['dbeta' + str(l + 1)]
 
     return parameters
 
@@ -546,7 +585,7 @@ def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size =
 
 
 
-def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=3000, mini_batch_size=64, print_cost=True):
+def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=10000, mini_batch_size=64, print_cost=True):
     parameters = initialize_parameters(layer_dims)
     batch_norm_parameters = initialize_batch_norm_parameters(layer_dims)
     costs = []
@@ -563,7 +602,7 @@ def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=300
             cost = compute_cross_entropy_cost(AL, mini_batch_Y)
 
             # backward propagation
-            grads, batch_norm_grads = model_backward_propagation_with_batch_norm(AL, Y, caches)
+            grads, batch_norm_grads = model_backward_propagation_with_batch_norm(AL, mini_batch_Y, caches)
 
             # update parameters
             parameters = update_parameters(parameters, grads, learning_rate)
@@ -572,6 +611,12 @@ def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=300
         if i % 100 == 0 and print_cost:
             print('cost after {0} epochs is: {1}'.format(i, cost))
             costs.append(cost)
+
+    plt.plot(np.squeeze(costs))
+    plt.ylabel('cost')
+    plt.xlabel('iterations (per hundreds)')
+    plt.title('Learning rate = ' + str(learning_rate))
+    plt.show()
 
     return parameters
 
@@ -762,7 +807,7 @@ def gradient_to_vector(grads):
 
 
 
-def gradient_check(parameters, gradients, X, Y, epsilon=1e-7):
+def gradient_check(parameters, gradients, X, Y, epsilon=1e-7, bn_check=False, bn_parameters=None):
     # Gradient check for network graph:
     #
     # X       ->    Z1  A1    ->    Z2  A2   ->   Z3  A3
@@ -779,12 +824,22 @@ def gradient_check(parameters, gradients, X, Y, epsilon=1e-7):
     for i in range(number_of_parameters):
         theta_plus = np.copy(theta)
         theta_plus[i][0] = theta_plus[i][0] + epsilon
-        AL_plus, _ = model_forward_propagation(X, vector_to_dict(theta_plus))
+
+        if bn_check:
+            AL_plus, _ = model_forward_propagation_with_batch_norm(X, vector_to_dict(theta_plus), bn_parameters)
+        else:
+            AL_plus, _ = model_forward_propagation(X, vector_to_dict(theta_plus))
+
         J_plus[i][0] = compute_cross_entropy_cost(AL_plus, Y)
 
         theta_minus = np.copy(theta)
         theta_minus[i][0] = theta_minus[i][0] - epsilon
-        AL_minus, _ = model_forward_propagation(X, vector_to_dict(theta_minus))
+
+        if bn_check:
+            AL_minus, _ = model_forward_propagation_with_batch_norm(X, vector_to_dict(theta_minus), bn_parameters)
+        else:
+            AL_minus, _ = model_forward_propagation(X, vector_to_dict(theta_minus))
+
         J_minus[i][0] = compute_cross_entropy_cost(AL_minus, Y)
 
         grads_approx[i][0] = (J_plus[i][0] - J_minus[i][0]) / (2 * epsilon)
@@ -939,6 +994,39 @@ def test_update_parameters():
     print('test_update_parameters passed!')
 
 
+def test_backward_propagation_with_batch_norm():
+    print('test_backward_propagation_with_batch_norm start:')
+
+    np.random.seed(0)
+
+    X = np.random.randn(5, 10) / 255.
+    Y = np.random.randint(2, size=(1, 10))
+
+    layer_dims = [X.shape[0], 5, 3, 1]
+    parameters = initialize_parameters(layer_dims)
+    bn_parameters = initialize_batch_norm_parameters(layer_dims)
+
+    AL, caches = model_forward_propagation_with_batch_norm(X, parameters, bn_parameters)
+    grads, bn_grads = model_backward_propagation_with_batch_norm(AL, Y, caches)
+
+    dW1 = grads['dW1']
+    db1 = grads['db1']
+    dW2 = grads['dW2']
+    db2 = grads['db2']
+    dW3 = grads['dW3']
+    db3 = grads['db3']
+
+    assert(dW1.shape == (5, 5))
+    assert(db1.shape == (5, 1))
+    assert(dW2.shape == (3, 5))
+    assert(db2.shape == (3, 1))
+    assert(dW3.shape == (1, 3))
+    assert(db3.shape == (1, 1))
+
+    gradient_check(parameters, grads, X, Y, epsilon=1e-7, bn_check=True, bn_parameters=bn_parameters)
+
+    print('test_backward_propagation_with_batch_norm passed!')
+
 def test_model_with_batch_norm():
     train_set_x_orig, train_set_y_orig, test_set_x_orig, test_set_y_orig = load_data()
     X = (train_set_x_orig.reshape(train_set_x_orig.shape[0], -1) / 255.).T
@@ -960,7 +1048,8 @@ def main():
     # test_compute_cross_entropy_cost()
     # test_model_backward_propagation()
     # test_update_parameters()
-    test_model_with_batch_norm()
+    # test_model_with_batch_norm()
+    test_backward_propagation_with_batch_norm()
 
 
 if __name__ == '__main__':
