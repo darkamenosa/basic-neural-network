@@ -299,8 +299,8 @@ def initialize_adam(parameters):
     return v, s
 
 
-def update_parameters_with_adam(parameters, grads, v, s, t, learning_rate = 0.01,
-                                beta1 = 0.9, beta2 = 0.999, epsilon=1e-8):
+def update_parameters_with_adam(parameters, grads, v, s, t, learning_rate,
+                                beta1, beta2, epsilon):
     L = len(parameters) // 2
     v_corrected = {}
     s_corrected = {}
@@ -536,7 +536,7 @@ def update_batch_norm_parameters(parameters, grads, learning_rate):
 ###  Network implementation
 ################################
 def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size = 64, beta = 0.9,
-        beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8, num_epochs = 10000, print_cost = True):
+        beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8, num_epochs = 3000, print_cost = True):
     parameters = initialize_parameters(layer_dims)
     costs = []
 
@@ -585,7 +585,7 @@ def model(X, Y, layer_dims, optimizer, learning_rate = 0.0007, mini_batch_size =
 
 
 
-def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=10000, mini_batch_size=64, print_cost=True):
+def model_with_batch_norm(X, Y, layer_dims, learning_rate=0.0075, num_epochs=3000, mini_batch_size=64, print_cost=True):
     parameters = initialize_parameters(layer_dims)
     batch_norm_parameters = initialize_batch_norm_parameters(layer_dims)
     costs = []
